@@ -1,5 +1,7 @@
 # Invisible Unicode Check
 
+[![ci](https://github.com/tkm112345/invisible-unicode-check/actions/workflows/ci.yml/badge.svg)](https://github.com/tkm112345/invisible-unicode-check/actions/workflows/ci.yml)
+
 不可視 Unicode を使ってソースコードに悪意あるコードを潜り込ませる攻撃（[GlassWorm](https://xtech.nikkei.com/atcl/nxt/column/18/00989/040100204/) 型のペイロード埋め込み、[Trojan Source](https://trojansource.codes/)）を検出し、プルリクエストのマージをブロックする GitHub Action。
 
 **npm パッケージを一切使いません。** Node.js の標準ライブラリのみで動作し、リポジトリに `package.json` を置いていないので `npm install` そのものが成立しません。サプライチェーン攻撃を検出するツールが、自分自身のサプライチェーンを持たない構成です。
