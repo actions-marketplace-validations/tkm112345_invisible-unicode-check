@@ -61,6 +61,9 @@ Go to **Settings → Rules → Rulesets → New branch ruleset**, target your de
 | IUC002 | tag-character | U+E0000–E007F — used to carry invisible payloads |
 | IUC003 | variation-selector-run | 3 or more variation selectors on one line — GlassWorm-style data encoding |
 | IUC004 | private-use | U+E000–F8FF and the supplementary private use planes |
+| IUC007 | line-separator | U+2028 / U+2029 — line terminators in JavaScript, so they can escape a string or a comment |
+| IUC008 | control-char | Any Cc character other than tab, LF, FF and CR — including U+001B, which enables ANSI escape injection |
+| IUC009 | noncharacter | U+FDD0–FDEF and every U+xFFFE / U+xFFFF — never valid in interchange |
 
 ### Warning — does not block
 
@@ -68,6 +71,9 @@ Go to **Settings → Rules → Rulesets → New branch ruleset**, target your de
 | --- | --- | --- |
 | IUC005 | invisible-format | ZWSP, ZWNJ, ZWJ, soft hyphen, LRM/RLM and other invisible format characters |
 | IUC006 | misplaced-bom | A byte-order mark anywhere other than the start of the file |
+| IUC010 | deceptive-space | Blank-looking characters that are not U+0020: NBSP, U+2000–200A, U+3000, and U+2800 braille blank |
+| IUC011 | combining-run | 5 or more combining marks in a row, which obscure the text underneath |
+| IUC012 | mixed-script-word | A single word mixing Latin with Cyrillic or Greek, e.g. `pаyload` with U+0430 |
 
 ## What gets scanned
 
@@ -89,6 +95,8 @@ File paths are scanned too, since a bidi override can be planted in a filename.
 **LRM/RLM (U+200E/200F) are not critical.** They appear legitimately in i18n text and are weak at rewriting how code looks on their own. Only the embedding, override and isolate controls block a merge.
 
 **Warnings never block.** Zero-width spaces and stray BOMs produce false positives, and a check that blocks on those gets disabled by the team it was meant to protect.
+
+**Mixed-script detection is word-level, not identifier-level.** Full [UTS #39](https://www.unicode.org/reports/tr39/) confusable analysis needs a tokenizer per language and a confusables table. Splitting a line into words and asking whether one word mixes Latin with Cyrillic or Greek catches the same homoglyph attack with a regex, at the cost of not distinguishing an identifier from a comment. It is therefore a warning, not a block.
 
 ## Limits
 

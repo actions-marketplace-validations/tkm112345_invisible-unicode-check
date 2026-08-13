@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_DIFF_BYTES = 50 * 1024 * 1024;
 const VS_RUN_THRESHOLD = 3;
+const COMBINING_RUN_THRESHOLD = 5;
 
 const RULES = {
   IUC001: { name: 'bidi-control', severity: 'critical', desc: 'Bidirectional control character (Trojan Source)' },
@@ -18,12 +19,26 @@ const RULES = {
   IUC004: { name: 'private-use', severity: 'critical', desc: 'Private Use Area character' },
   IUC005: { name: 'invisible-format', severity: 'warning', desc: 'Invisible or zero-width format character' },
   IUC006: { name: 'misplaced-bom', severity: 'warning', desc: 'Byte-order mark outside the start of the file' },
+  IUC007: { name: 'line-separator', severity: 'critical', desc: 'Line/paragraph separator (terminates a line in JavaScript)' },
+  IUC008: { name: 'control-char', severity: 'critical', desc: 'Control character (ANSI escape injection, truncation)' },
+  IUC009: { name: 'noncharacter', severity: 'critical', desc: 'Unicode noncharacter, never valid in interchange' },
+  IUC010: { name: 'deceptive-space', severity: 'warning', desc: 'Blank-looking character that is not an ASCII space' },
+  IUC011: { name: 'combining-run', severity: 'warning', desc: 'Long run of combining marks (obscures the text beneath)' },
+  IUC012: { name: 'mixed-script-word', severity: 'warning', desc: 'One word mixes Latin with Cyrillic or Greek (homoglyph)' },
 };
 
 // Default_Ignorable_Code_Point covers ZWSP/ZWNJ/ZWJ/word joiner/soft hyphen and
 // friends. It also covers the ranges handled by the rules above, so it is only
 // consulted after those have been ruled out.
 const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+const COMBINING = /\p{Mn}|\p{Me}/u;
+const LATIN = /[A-Za-z]/;
+const CYRILLIC_OR_GREEK = /\p{Script=Cyrillic}|\p{Script=Greek}/u;
+const WORD = /[\p{L}\p{N}_$]+/gu;
+
+// Blank-looking characters that are not U+0020. Zero-width ones are already
+// Default_Ignorable; these render as a space, or as nothing at all (U+2800).
+const DECEPTIVE_SPACES = new Set([0x00a0, 0x1680, 0x202f, 0x205f, 0x3000, 0x2800]);
 
 // U+202A-202E and U+2066-2069 can reorder rendered source. U+200E/200F/061C are
 // weaker directional markers and fall through to IUC005 as warnings.
@@ -32,6 +47,11 @@ const isTag = (cp) => cp >= 0xe0000 && cp <= 0xe007f;
 const isVariationSelector = (cp) => (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0xe0100 && cp <= 0xe01ef);
 const isPrivateUse = (cp) =>
   (cp >= 0xe000 && cp <= 0xf8ff) || (cp >= 0xf0000 && cp <= 0xffffd) || (cp >= 0x100000 && cp <= 0x10fffd);
+const isNoncharacter = (cp) => (cp >= 0xfdd0 && cp <= 0xfdef) || (cp & 0xfffe) === 0xfffe;
+// Tab, newline, form feed and carriage return are ordinary whitespace in source.
+const isControl = (cp) =>
+  (cp < 0x20 && cp !== 0x09 && cp !== 0x0a && cp !== 0x0c && cp !== 0x0d) || cp === 0x7f || (cp >= 0x80 && cp <= 0x9f);
+const isDeceptiveSpace = (cp) => DECEPTIVE_SPACES.has(cp) || (cp >= 0x2000 && cp <= 0x200a);
 
 /** Return the rule id for a single code point, or null if it is unremarkable. */
 function classify(cp, ch) {
@@ -39,8 +59,12 @@ function classify(cp, ch) {
   if (isTag(cp)) return 'IUC002';
   if (isPrivateUse(cp)) return 'IUC004';
   if (isVariationSelector(cp)) return null; // counted per line by IUC003
+  if (cp === 0x2028 || cp === 0x2029) return 'IUC007';
+  if (isControl(cp)) return 'IUC008';
+  if (isNoncharacter(cp)) return 'IUC009';
   if (cp === 0xfeff) return 'IUC006';
   if (IGNORABLE.test(ch)) return 'IUC005';
+  if (isDeceptiveSpace(cp)) return 'IUC010';
   return null;
 }
 
@@ -51,9 +75,8 @@ function escapeInvisible(text) {
   let out = '';
   for (const ch of text) {
     const cp = ch.codePointAt(0);
-    const hidden =
-      isBidiControl(cp) || isTag(cp) || isPrivateUse(cp) || isVariationSelector(cp) || IGNORABLE.test(ch);
-    out += hidden || (cp < 0x20 && cp !== 0x09) ? `\\u{${cp.toString(16).toUpperCase()}}` : ch;
+    const hidden = isVariationSelector(cp) || classify(cp, ch) !== null;
+    out += hidden ? `\\u{${cp.toString(16).toUpperCase()}}` : ch;
   }
   return out;
 }
@@ -63,15 +86,24 @@ function snippet(line) {
   return s.length > 120 ? s.slice(0, 120) + '...' : s;
 }
 
-/**
- * Scan one line. `changed` selects the depth of the check: critical rules run on
- * every line of every touched file, the rest only on lines the PR actually added.
- */
-function scanLine(file, line, lineNo, changed) {
+const finding = (ruleId, file, line, col, message, near) => ({
+  ruleId,
+  file,
+  line,
+  col,
+  message,
+  snippet: near,
+});
+
+/** Per-line checks that need to look at a sequence rather than a single code point. */
+function scanSequences(file, line, lineNo) {
   const findings = [];
   let col = 0;
   let vsCount = 0;
   let vsCol = 0;
+  let combining = 0;
+  let combiningCol = 0;
+  let reportedCombining = false;
 
   for (const ch of line) {
     col += 1;
@@ -80,34 +112,70 @@ function scanLine(file, line, lineNo, changed) {
     if (isVariationSelector(cp)) {
       vsCount += 1;
       if (vsCount === 1) vsCol = col;
+      combining = 0;
       continue;
     }
+    if (COMBINING.test(ch)) {
+      combining += 1;
+      if (combining === 1) combiningCol = col;
+      if (combining >= COMBINING_RUN_THRESHOLD && !reportedCombining) {
+        reportedCombining = true;
+        findings.push(
+          finding('IUC011', file, lineNo, combiningCol, `${RULES.IUC011.desc}`, snippet(line))
+        );
+      }
+    } else {
+      combining = 0;
+    }
+  }
+
+  if (vsCount >= VS_RUN_THRESHOLD) {
+    findings.push(
+      finding(
+        'IUC003',
+        file,
+        lineNo,
+        vsCol,
+        `${vsCount} variation selectors on one line — ${RULES.IUC003.desc}`,
+        snippet(line)
+      )
+    );
+  }
+
+  for (const m of line.matchAll(WORD)) {
+    const word = m[0];
+    if (LATIN.test(word) && CYRILLIC_OR_GREEK.test(word)) {
+      findings.push(
+        finding('IUC012', file, lineNo, m.index + 1, `'${word}' — ${RULES.IUC012.desc}`, snippet(line))
+      );
+    }
+  }
+  return findings;
+}
+
+/**
+ * Scan one line. `changed` selects the depth of the check: critical rules run on
+ * every line of every touched file, the rest only on lines the PR actually added.
+ */
+function scanLine(file, line, lineNo, changed) {
+  const findings = [];
+  let col = 0;
+
+  for (const ch of line) {
+    col += 1;
+    const cp = ch.codePointAt(0);
     const ruleId = classify(cp, ch);
     if (!ruleId) continue;
     if (ruleId === 'IUC006' && lineNo === 1 && col === 1) continue; // legitimate leading BOM
     if (!changed && RULES[ruleId].severity !== 'critical') continue;
-
-    findings.push({
-      ruleId,
-      file,
-      line: lineNo,
-      col,
-      message: `${hex(cp)} ${RULES[ruleId].desc}`,
-      snippet: snippet(line),
-    });
+    findings.push(finding(ruleId, file, lineNo, col, `${hex(cp)} ${RULES[ruleId].desc}`, snippet(line)));
   }
 
-  if (vsCount >= VS_RUN_THRESHOLD) {
-    findings.push({
-      ruleId: 'IUC003',
-      file,
-      line: lineNo,
-      col: vsCol,
-      message: `${vsCount} variation selectors on one line — ${RULES.IUC003.desc}`,
-      snippet: snippet(line),
-    });
+  for (const f of scanSequences(file, line, lineNo)) {
+    if (!changed && RULES[f.ruleId].severity !== 'critical') continue;
+    findings.push(f);
   }
-  return findings;
+  return findings.sort((a, b) => a.col - b.col);
 }
 
 function scanText(file, text, changedLines) {
@@ -122,23 +190,10 @@ function scanText(file, text, changedLines) {
 
 /** A path can itself carry a bidi override or a hidden payload. */
 function scanPath(file) {
-  const findings = [];
-  let col = 0;
-  for (const ch of file) {
-    col += 1;
-    const cp = ch.codePointAt(0);
-    const ruleId = isVariationSelector(cp) ? 'IUC003' : classify(cp, ch);
-    if (!ruleId || RULES[ruleId].severity !== 'critical') continue;
-    findings.push({
-      ruleId,
-      file,
-      line: 1,
-      col,
-      message: `${hex(cp)} in the file path — ${RULES[ruleId].desc}`,
-      snippet: escapeInvisible(file),
-    });
-  }
-  return findings;
+  return scanLine(file, file, 1, false).map((f) => ({
+    ...f,
+    message: `${f.message} (in the file path)`,
+  }));
 }
 
 /** Parse `git diff -U0` output into { path -> Set(added line numbers) }. */

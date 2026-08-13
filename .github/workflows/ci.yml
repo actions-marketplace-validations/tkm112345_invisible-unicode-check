@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: node --test test/scan.test.js
+      - run: node --test test/*.test.js
 
   self-check:
     # このアクションを自分自身に対して実行する
