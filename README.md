@@ -1,5 +1,6 @@
 # Invisible Unicode Check
 
+[![Marketplace](https://img.shields.io/badge/Marketplace-Invisible%20Unicode%20Check-blue?logo=github)](https://github.com/marketplace/actions/invisible-unicode-check)
 [![ci](https://github.com/tkm112345/invisible-unicode-check/actions/workflows/ci.yml/badge.svg)](https://github.com/tkm112345/invisible-unicode-check/actions/workflows/ci.yml)
 
 A GitHub Action that detects invisible Unicode used to smuggle malicious code into source files — [GlassWorm](https://xtech.nikkei.com/atcl/nxt/column/18/00989/040100204/)-style payload encoding and [Trojan Source](https://trojansource.codes/) — and blocks the pull request from being merged.
@@ -41,15 +42,26 @@ Go to **Settings → Rules → Rulesets → New branch ruleset**, target your de
 | Input | Default | Description |
 | --- | --- | --- |
 | `base-sha` | resolved from the event | Commit to diff against. `pull_request.base.sha` for pull requests, `before` for pushes. |
-| `exclude` | none | Glob patterns to skip, separated by newlines or commas. Supports `**`, `*` and `?`. |
+| `exclude` | none | Glob patterns to skip **entirely**, separated by newlines or commas. Supports `**`, `*` and `?`. |
+| `ignore-rules` | none | Disable **specific rules** for **specific paths**, one `<glob>:<RULE_ID>[,<RULE_ID>...]` per line. |
 
 ```yaml
       - uses: tkm112345/invisible-unicode-check@v1
         with:
           exclude: |
-            locales/**
             *.po
+          ignore-rules: |
+            # Arabic and Hebrew resources legitimately use directional markers
+            locales/**:IUC005,IUC010
+            # this vendored file mixes Greek symbols into identifiers
+            src/vendor/mathjax-shim.js:IUC012
 ```
+
+`exclude` removes a file from the scan completely. `ignore-rules` keeps the file under every other rule and silences only the ones you name — so a bidi override planted in `locales/ar/app.json` is still caught even while `IUC005` is silenced there.
+
+A glob with no wildcard matches that one file exactly, so `src/vendor/thing.js:IUC005` is a per-file switch.
+
+Rule ids are case insensitive, `#` starts a comment, and an unknown rule id is reported as a warning rather than silently accepted — a typo like `IUC0012` will not quietly disable anything. Silencing a **critical** rule is allowed, but the run log always states which blocking rule was disabled for which path, and the summary line reports how many findings were suppressed.
 
 ## Rules
 

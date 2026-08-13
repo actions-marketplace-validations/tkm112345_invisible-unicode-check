@@ -242,6 +242,48 @@ function globToRegExp(glob) {
 
 const matchesAny = (file, patterns) => patterns.some((p) => p.test(file));
 
+/**
+ * Parse the `ignore-rules` input: one `<glob>:<RULE_ID>[,<RULE_ID>...]` per line.
+ * Returns the usable entries plus anything that could not be understood, so the
+ * caller can report typos instead of silently ignoring them.
+ */
+function parseIgnoreRules(text) {
+  const entries = [];
+  const problems = [];
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+
+    // Split on the last colon so a path may contain one.
+    const sep = line.lastIndexOf(':');
+    if (sep === -1) {
+      problems.push(`'${line}' is not '<glob>:<RULE_ID>'`);
+      continue;
+    }
+    const glob = line.slice(0, sep).trim();
+    const ids = line
+      .slice(sep + 1)
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    if (!glob) {
+      problems.push(`'${line}' has no path pattern`);
+      continue;
+    }
+    const known = ids.filter((id) => {
+      if (RULES[id]) return true;
+      problems.push(`'${id}' is not a known rule id`);
+      return false;
+    });
+    if (known.length > 0) entries.push({ glob, re: globToRegExp(glob), ids: new Set(known) });
+  }
+  return { entries, problems };
+}
+
+const isIgnored = (entries, file, ruleId) =>
+  entries.some((entry) => entry.ids.has(ruleId) && entry.re.test(file));
+
 // --- GitHub Actions plumbing ------------------------------------------------
 
 const getInput = (name) => (process.env[`INPUT_${name.replace(/ /g, '_').toUpperCase()}`] || '').trim();
@@ -332,12 +374,22 @@ function main() {
     .filter(Boolean)
     .map(globToRegExp);
 
+  const { entries: ignoreRules, problems } = parseIgnoreRules(getInput('ignore-rules'));
+  for (const problem of problems) console.log(`::warning::ignore-rules: ${problem}`);
+  for (const entry of ignoreRules) {
+    // Suppressing a blocking rule is allowed, but it must never be silent.
+    const suppressed = [...entry.ids].filter((id) => RULES[id].severity === 'critical');
+    if (suppressed.length > 0) {
+      console.log(`::warning::ignore-rules disables blocking rule(s) ${suppressed.join(', ')} for '${entry.glob}'`);
+    }
+  }
+
   const { targets } = collectTargets(resolveBaseSha());
-  const findings = [];
+  const collected = [];
 
   for (const [file, changedLines] of targets) {
     if (matchesAny(file, excludes)) continue;
-    findings.push(...scanPath(file));
+    collected.push(...scanPath(file));
 
     let buf;
     try {
@@ -351,8 +403,11 @@ function main() {
     }
     if (buf.includes(0)) continue; // binary
 
-    findings.push(...scanText(file, buf.toString('utf8'), changedLines));
+    collected.push(...scanText(file, buf.toString('utf8'), changedLines));
   }
+
+  const findings = collected.filter((f) => !isIgnored(ignoreRules, f.file, f.ruleId));
+  const suppressed = collected.length - findings.length;
 
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.col - b.col);
   for (const f of findings) annotate(f);
@@ -364,8 +419,9 @@ function main() {
   }
   writeSummary(findings);
 
+  const note = suppressed > 0 ? `, ${suppressed} suppressed by ignore-rules` : '';
   console.log(
-    `\nScanned ${targets.size} file(s): ${critical.length} critical, ${findings.length - critical.length} warning(s).`
+    `\nScanned ${targets.size} file(s): ${critical.length} critical, ${findings.length - critical.length} warning(s)${note}.`
   );
   if (critical.length > 0) {
     console.log('::error::Invisible Unicode detected. This pull request must not be merged as-is.');
@@ -373,6 +429,17 @@ function main() {
   }
 }
 
-module.exports = { scanLine, scanText, scanPath, parseDiff, globToRegExp, escapeInvisible, classify, RULES };
+module.exports = {
+  scanLine,
+  scanText,
+  scanPath,
+  parseDiff,
+  globToRegExp,
+  parseIgnoreRules,
+  isIgnored,
+  escapeInvisible,
+  classify,
+  RULES,
+};
 
 if (require.main === module) main();

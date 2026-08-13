@@ -12,7 +12,11 @@ inputs:
     required: false
     default: ''
   exclude:
-    description: 'Glob patterns to skip, one per line or comma separated. Example: locales/**'
+    description: 'Glob patterns to skip entirely, one per line or comma separated. Example: locales/**'
+    required: false
+    default: ''
+  ignore-rules:
+    description: 'Disable specific rules for specific paths, one `<glob>:<RULE_ID>[,<RULE_ID>...]` per line. Example: locales/**:IUC012'
     required: false
     default: ''
 
