@@ -119,10 +119,12 @@ The real-world GlassWorm damage arrived through npm packages and VS Code extensi
 ## Development
 
 ```sh
-node --test test/scan.test.js
+node --test test/*.test.js
 ```
 
 The tests build their payloads with `String.fromCodePoint()`, so this repository contains no invisible characters of its own and passes its own scan.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the rules that govern changes here — chiefly that this repository never takes an npm dependency, and how to choose between a blocking rule and a warning.
 
 [Pull request #1](https://github.com/tkm112345/invisible-unicode-check/pull/1) is kept open on purpose: it plants real payloads and demonstrates the action blocking the merge. It is never merged.
 
