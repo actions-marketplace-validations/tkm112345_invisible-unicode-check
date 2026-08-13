@@ -296,7 +296,14 @@ function collectTargets(baseSha) {
     console.log('::warning::no base commit available; scanning all tracked files');
   }
   // Fall back loudly rather than silently checking nothing.
-  const files = git(['-c', 'core.quotepath=false', 'ls-files']).split('\n').filter(Boolean);
+  let files;
+  try {
+    files = git(['-c', 'core.quotepath=false', 'ls-files']).split('\n').filter(Boolean);
+  } catch (err) {
+    // Never pass by accident: if we cannot even list files, fail the check.
+    console.log(`::error::cannot list files (${err.message.split('\n')[0]})`);
+    process.exit(1);
+  }
   return { targets: new Map(files.map((f) => [f, null])), diffed: false };
 }
 
