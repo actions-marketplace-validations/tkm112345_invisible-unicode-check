@@ -1,0 +1,21 @@
+name: 'Invisible Unicode Check'
+description: 'Block pull requests that introduce invisible or adversarial Unicode (GlassWorm, Trojan Source).'
+author: 'tkm112345'
+
+branding:
+  icon: 'eye-off'
+  color: 'red'
+
+inputs:
+  base-sha:
+    description: 'Commit to diff against. Defaults to the pull request base, or the push event''s before SHA.'
+    required: false
+    default: ''
+  exclude:
+    description: 'Glob patterns to skip, one per line or comma separated. Example: locales/**'
+    required: false
+    default: ''
+
+runs:
+  using: 'node24'
+  main: 'index.js'
