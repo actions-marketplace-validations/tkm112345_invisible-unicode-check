@@ -2,11 +2,11 @@
 
 [![ci](https://github.com/tkm112345/invisible-unicode-check/actions/workflows/ci.yml/badge.svg)](https://github.com/tkm112345/invisible-unicode-check/actions/workflows/ci.yml)
 
-不可視 Unicode を使ってソースコードに悪意あるコードを潜り込ませる攻撃（[GlassWorm](https://xtech.nikkei.com/atcl/nxt/column/18/00989/040100204/) 型のペイロード埋め込み、[Trojan Source](https://trojansource.codes/)）を検出し、プルリクエストのマージをブロックする GitHub Action。
+A GitHub Action that detects invisible Unicode used to smuggle malicious code into source files — [GlassWorm](https://xtech.nikkei.com/atcl/nxt/column/18/00989/040100204/)-style payload encoding and [Trojan Source](https://trojansource.codes/) — and blocks the pull request from being merged.
 
-**npm パッケージを一切使いません。** Node.js の標準ライブラリのみで動作し、リポジトリに `package.json` を置いていないので `npm install` そのものが成立しません。サプライチェーン攻撃を検出するツールが、自分自身のサプライチェーンを持たない構成です。
+**No npm packages.** It runs on the Node.js standard library alone, and this repository ships no `package.json`, so `npm install` has nothing to install. A tool that detects supply chain attacks should not have a supply chain of its own.
 
-## 使い方
+## Usage
 
 ```yaml
 name: invisible-unicode
@@ -24,25 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # ベースコミットとの diff に必要
+          fetch-depth: 0        # required to diff against the base commit
       - uses: tkm112345/invisible-unicode-check@v1
 ```
 
-### マージを実際に止める設定
+### Making it actually block a merge
 
-Action は失敗するだけで、マージボタンを止めるのは GitHub 側の設定です。
+The action only fails the job. Blocking the merge button is a repository setting.
 
-**Settings → Rules → Rulesets → New branch ruleset** で対象ブランチを指定し、
-**Require status checks to pass** に `scan`（= job 名）を追加します。
+Go to **Settings → Rules → Rulesets → New branch ruleset**, target your default branch, and add `scan` (the job name) under **Require status checks to pass**.
 
-> `on.pull_request` に `paths:` フィルタを付けないでください。フィルタでジョブがスキップされると required status check が永久に pending になり、マージ不能になります。
+> Do not add a `paths:` filter to `on.pull_request`. If the filter skips the job, the required status check stays pending forever and the pull request can never be merged.
 
-## 入力
+## Inputs
 
-| 入力 | 既定値 | 説明 |
+| Input | Default | Description |
 | --- | --- | --- |
-| `base-sha` | イベントから自動判定 | diff の基準コミット。PR なら `pull_request.base.sha`、push なら `before` |
-| `exclude` | なし | 除外する glob。改行かカンマ区切り。`**` `*` `?` に対応 |
+| `base-sha` | resolved from the event | Commit to diff against. `pull_request.base.sha` for pull requests, `before` for pushes. |
+| `exclude` | none | Glob patterns to skip, separated by newlines or commas. Supports `**`, `*` and `?`. |
 
 ```yaml
       - uses: tkm112345/invisible-unicode-check@v1
@@ -52,57 +51,61 @@ Action は失敗するだけで、マージボタンを止めるのは GitHub �
             *.po
 ```
 
-## 検出ルール
+## Rules
 
-### critical（マージをブロック）
+### Critical — blocks the merge
 
-| ID | 名前 | 対象 |
+| ID | Name | Detects |
 | --- | --- | --- |
-| IUC001 | bidi-control | U+202A–202E, U+2066–2069（表示順を書き換えられる制御文字） |
-| IUC002 | tag-character | U+E0000–E007F（不可視のペイロード運搬に使われる） |
-| IUC003 | variation-selector-run | 1行に異体字セレクタが3個以上（GlassWorm のデータ埋め込み） |
-| IUC004 | private-use | U+E000–F8FF ほか私用領域 |
+| IUC001 | bidi-control | U+202A–202E, U+2066–2069 — control characters that reorder rendered source |
+| IUC002 | tag-character | U+E0000–E007F — used to carry invisible payloads |
+| IUC003 | variation-selector-run | 3 or more variation selectors on one line — GlassWorm-style data encoding |
+| IUC004 | private-use | U+E000–F8FF and the supplementary private use planes |
 
-### warning（ブロックしない）
+### Warning — does not block
 
-| ID | 名前 | 対象 |
+| ID | Name | Detects |
 | --- | --- | --- |
-| IUC005 | invisible-format | ZWSP/ZWNJ/ZWJ/soft hyphen/LRM/RLM などの不可視文字 |
-| IUC006 | misplaced-bom | ファイル先頭以外に現れた BOM |
+| IUC005 | invisible-format | ZWSP, ZWNJ, ZWJ, soft hyphen, LRM/RLM and other invisible format characters |
+| IUC006 | misplaced-bom | A byte-order mark anywhere other than the start of the file |
 
-## 走査範囲
+## What gets scanned
 
-**PR が触れたファイル**だけを対象とし、その中で:
+Only files the pull request touches. Within those files:
 
-- **critical ルールはファイル全行**に適用する
-- warning ルールは **PR が追加・変更した行のみ**に適用する
+- **critical rules run on every line**
+- warning rules run **only on lines the pull request added or changed**
 
-既存コードに埋まっているペイロードを見逃さない一方で、既存の絵文字や i18n テキストで PR がノイズだらけになるのを防ぐための線引きです。
+This catches a payload already sitting in a file the pull request touches, without drowning the author in findings from pre-existing emoji or i18n text.
 
-ベースコミットが特定できない場合や `git diff` が失敗した場合は、警告を出したうえで**追跡中の全ファイルを全行スキャン**にフォールバックします。検査を黙ってスキップすることはありません。
+If the base commit cannot be determined, or `git diff` fails, the action prints a warning and falls back to scanning **every tracked file, every line**. It never skips the check silently.
 
-ファイルパス自体も検査対象です（ファイル名に bidi override を仕込む攻撃があるため）。
+File paths are scanned too, since a bidi override can be planted in a filename.
 
-## 設計上の判断
+## Design decisions
 
-**異体字セレクタは「1行に3個以上」で判定する。** 絵文字（`⚠️` = U+26A0 U+FE0F）は正当に1個使うので、1〜2個は無視します。GlassWorm 型のペイロードは1行に数十個を連結するため、この閾値で分離できます。裏を返せば **2個ずつ複数行に分散されると検出できません**。閾値方式の限界として認識してください。
+**Variation selectors are judged by density: 3 or more on one line.** A legitimate emoji uses exactly one (`⚠️` is U+26A0 U+FE0F), so one or two are ignored. A GlassWorm-style payload chains dozens on a single line, which this threshold separates cleanly. The tradeoff: **a payload split into runs of two across many lines will not be caught.** That is the inherent limit of a threshold.
 
-**LRM/RLM (U+200E/200F) は critical にしていない。** これらは i18n テキストで正当に使われ、かつ単体でコードの見た目を書き換える力が弱いためです。ブロックするのは埋め込み・上書き・分離の制御文字のみ。
+**LRM/RLM (U+200E/200F) are not critical.** They appear legitimately in i18n text and are weak at rewriting how code looks on their own. Only the embedding, override and isolate controls block a merge.
 
-**warning はマージをブロックしない。** ZWSP や BOM は誤検知しやすく、これでブロックすると運用側がチェックごと無効化してしまうためです。
+**Warnings never block.** Zero-width spaces and stray BOMs produce false positives, and a check that blocks on those gets disabled by the team it was meant to protect.
 
-## 限界
+## Limits
 
-このツールが守るのは **自分のリポジトリに入ってくる PR** だけです。GlassWorm の実際の被害は npm パッケージや VS Code 拡張機能（Open VSX）経由の汚染であり、PR ゲートでは防げません。依存パッケージの取得物を検査する仕組みは別途必要です。
+This action protects **pull requests coming into your repository**. It does not protect you from a compromised upstream dependency.
 
-## 開発
+The real-world GlassWorm damage arrived through npm packages and VS Code extensions on Open VSX, and the same is true of the [keyv/cacheable compromise](https://socket.dev/blog/popular-npm-packages-in-the-keyv-and-cacheable-namespaces-compromised-in-active-supply-chain) — malicious files land in `node_modules` at install time, never passing through a pull request. Those payloads are also plain obfuscated JavaScript rather than invisible Unicode, so none of the rules above would fire even if `node_modules` were scanned. Defending against that requires separate controls: `npm ci --ignore-scripts`, pinned lockfiles, and review of dependency diffs.
+
+## Development
 
 ```sh
 node --test test/scan.test.js
 ```
 
-テストは `String.fromCodePoint()` でペイロードを組み立てるため、このリポジトリ自体には不可視文字が1つも含まれていません（自己スキャンが通ります）。
+The tests build their payloads with `String.fromCodePoint()`, so this repository contains no invisible characters of its own and passes its own scan.
 
-## ライセンス
+[Pull request #1](https://github.com/tkm112345/invisible-unicode-check/pull/1) is kept open on purpose: it plants real payloads and demonstrates the action blocking the merge. It is never merged.
+
+## License
 
 MIT
