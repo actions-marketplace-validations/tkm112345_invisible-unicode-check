@@ -73,7 +73,7 @@ Go to **Settings → Rules → Rulesets → New branch ruleset**, target your de
 | IUC006 | misplaced-bom | A byte-order mark anywhere other than the start of the file |
 | IUC010 | deceptive-space | Blank-looking characters that are not U+0020: NBSP, U+2000–200A, U+3000, and U+2800 braille blank |
 | IUC011 | combining-run | 5 or more combining marks in a row, which obscure the text underneath |
-| IUC012 | mixed-script-word | A single word mixing Latin with Cyrillic or Greek, e.g. `pаyload` with U+0430 |
+| IUC012 | mixed-script-word | A single word mixing Latin with Cyrillic or Greek, e.g. `payload` whose `a` is U+0430 CYRILLIC SMALL LETTER A |
 
 ## What gets scanned
 
